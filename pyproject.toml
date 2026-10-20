@@ -1,0 +1,39 @@
+[project]
+name = "umarell"
+version = "0.1.0"
+description = "GitHub webhook announcements for IRC"
+readme = "README.md"
+authors = [
+    { name = "Matteo Panella", email = "morpheus@azzurra.chat" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "aiohttp>=3.13,<4",
+    "ircrobots==0.7.2",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+umarell = "umarell:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1",
+    "ruff>=0.14",
+    "ty>=0.0.89",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"

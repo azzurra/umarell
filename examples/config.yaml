@@ -1,0 +1,39 @@
+# Contains sensitive values: copy to config.yaml and chmod 600 (or 640).
+http:
+  host: "::"  # All IPv6 interfaces; override to choose another bind address.
+  port: 8080
+  max_body_bytes: 1048576
+  max_inflight: 32
+
+irc:
+  host: irc.example.org
+  port: 6697
+  nickname: umarell
+  # username: umarell  # IRC USER username; defaults to nickname.
+  # realname: "umarell GitHub announcements"  # Defaults to nickname.
+  channels: ['#team']
+  # ca_file: local-ca.pem  # Relative to this configuration file; optional.
+  # password: REPLACE_WITH_SERVER_PASSWORD
+  # sasl:
+  #   username: umarell
+  #   password: REPLACE_WITH_ACCOUNT_PASSWORD
+  # For networks without SASL, omit sasl and optionally identify to NickServ:
+  # on_connect:
+  #   - command: PRIVMSG
+  #     params: [NickServ, "IDENTIFY YOUR_ACCOUNT REPLACE_WITH_ACCOUNT_PASSWORD"]
+  #     delay_after: 2
+
+relay:
+  capacity: 100
+  expiry_seconds: 30
+  send_interval: 1.0
+  dedupe_capacity: 10000
+  dedupe_seconds: 3600
+
+hooks:
+  team:
+    secret: REPLACE_WITH_A_LONG_RANDOM_WEBHOOK_SECRET
+    repositories:
+      - id: 123456789  # Replace with the repository's numeric GitHub ID.
+        channels: ['#team']
+        events: [pull_request, issues, workflow_run, pull_request_review]
