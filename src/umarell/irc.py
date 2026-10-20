@@ -22,6 +22,7 @@ from .relay import Pending, Relay
 
 LOG = logging.getLogger(__name__)
 SETUP_TIMEOUT = 90
+QUIT_TIMEOUT = 2
 
 
 class ConnectionReader(TCPReader):
@@ -272,9 +273,20 @@ class IRCBot(Bot):
                 self.current = None
                 server.connection_ended.set()
                 if server.connection_writer is not None:
-                    with contextlib.suppress(OSError, TimeoutError):
-                        async with asyncio.timeout(5):
-                            await server.disconnect()
+                    try:
+                        # Session workers have stopped, so no native sender can
+                        # race this final write. Its queue is deliberately not
+                        # flushed: pending announcements must stay discarded.
+                        with contextlib.suppress(OSError, TimeoutError):
+                            async with asyncio.timeout(QUIT_TIMEOUT):
+                                server.connection_writer.write(
+                                    b"QUIT :Connection closing\r\n"
+                                )
+                                await server.connection_writer.drain()
+                    finally:
+                        with contextlib.suppress(OSError, TimeoutError):
+                            async with asyncio.timeout(5):
+                                await server.disconnect()
             if server.registration.is_set():
                 delay = 1
             await asyncio.sleep(delay)

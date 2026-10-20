@@ -4,14 +4,17 @@ import contextlib
 import hashlib
 import hmac
 import json
+import signal
 import ssl
 import subprocess
+import sys
 from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 
 import pytest
+import yaml
 from aiohttp.test_utils import TestClient, TestServer
 from ircrobots.params import SASLUserPass
 from ircrobots.server import Server
@@ -371,6 +374,165 @@ async def test_shutdown_leaves_no_native_reader_helpers(
         async with running_bot(fixture) as (_, relay):
             await until(lambda: "#team" in relay.ready)
     assert not (asyncio.all_tasks() - before)
+
+
+@pytest.mark.parametrize("exit_reason", ["cancel", "failure"])
+@pytest.mark.parametrize("during_setup", [False, True])
+async def test_connection_exit_sends_quit_before_eof(
+    certificate: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    exit_reason: str,
+    during_setup: bool,
+) -> None:
+    async with IRCFixture(certificate) as fixture:
+        relay = Relay(RelayConfig())
+        commands = (
+            (OnConnectCommand("PRIVMSG", ("NickServ", "setup-marker"), 30),)
+            if during_setup
+            else ()
+        )
+        bot = IRCBot(
+            IRCConfig(
+                "localhost",
+                port=fixture.port,
+                channels=("#team",),
+                ca_file=certificate[0],
+                on_connect=commands,
+            ),
+            relay,
+        )
+        task = asyncio.create_task(bot.run())
+        try:
+            await until(
+                lambda: (
+                    bool(identifications(fixture.lines))
+                    if during_setup
+                    else "#team" in relay.ready
+                )
+            )
+            if exit_reason == "cancel":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+
+                async def fail(line: Line) -> None:
+                    raise RuntimeError("test worker failure")
+
+                assert bot.current is not None
+                monkeypatch.setattr(bot.current, "line_read", fail)
+                await fixture.write(fixture.writers[0], "NOTICE umarell :trigger")
+                with pytest.raises(RuntimeError, match="test worker failure"):
+                    await asyncio.wait_for(task, 2)
+            await until(lambda: not fixture.handlers)
+            quits = [line for line in fixture.lines if line.command == "QUIT"]
+            assert len(quits) == 1
+            assert fixture.lines[-1] is quits[0]
+            if during_setup:
+                assert not any(line.command == "JOIN" for line in fixture.lines)
+            assert fixture.connections == 1
+        finally:
+            relay.close()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("failure", ["write", "drain", "timeout"])
+async def test_failed_quit_still_closes_connection(
+    certificate: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from umarell import irc
+
+    monkeypatch.setattr(irc, "QUIT_TIMEOUT", 0.02)
+    async with IRCFixture(certificate) as fixture:
+        async with running_bot(fixture) as (bot, relay):
+            await until(lambda: "#team" in relay.ready)
+            assert bot.current is not None
+            writer = bot.current.connection_writer
+            assert writer is not None
+            close = writer.close
+            closed = asyncio.Event()
+            attempted = asyncio.Event()
+
+            def broken_write(data: bytes) -> None:
+                attempted.set()
+                raise OSError("test write failure")
+
+            async def broken_drain() -> None:
+                attempted.set()
+                if failure == "timeout":
+                    await asyncio.Future()
+                raise OSError("test drain failure")
+
+            async def closing() -> None:
+                closed.set()
+                await close()
+
+            monkeypatch.setattr(writer, "close", closing)
+            if failure == "write":
+                monkeypatch.setattr(writer, "write", broken_write)
+            else:
+                monkeypatch.setattr(writer, "drain", broken_drain)
+        # Cancellation must finish despite a failed or unresponsive QUIT write.
+        assert attempted.is_set()
+        assert closed.is_set()
+        await until(lambda: not fixture.handlers)
+        assert fixture.connections == 1
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
+async def test_process_signal_sends_quit(
+    certificate: tuple[Path, Path],
+    tmp_path: Path,
+    unused_tcp_port: int,
+    sig: signal.Signals,
+) -> None:
+    async with IRCFixture(certificate) as fixture:
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "http": {"host": "127.0.0.1", "port": unused_tcp_port},
+                    "irc": {
+                        "host": "localhost",
+                        "port": fixture.port,
+                        "ca_file": str(certificate[0]),
+                        "channels": ["#team"],
+                    },
+                    "hooks": {
+                        "team": {
+                            "secret": "test-secret",
+                            "repositories": [{"id": 1, "channels": ["#team"]}],
+                        }
+                    },
+                }
+            )
+        )
+        config.chmod(0o600)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "umarell",
+            "--config",
+            str(config),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            await until(lambda: any(line.command == "JOIN" for line in fixture.lines))
+            process.send_signal(sig)
+            _, stderr = await asyncio.wait_for(process.communicate(), 5)
+            assert process.returncode == 0, stderr.decode()
+            await until(lambda: not fixture.handlers)
+            assert sum(line.command == "QUIT" for line in fixture.lines) == 1
+            assert fixture.lines[-1].command == "QUIT"
+            assert fixture.connections == 1
+        finally:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
 
 
 def identifications(lines: Sequence[Line]) -> list[Line]:
