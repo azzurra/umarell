@@ -6,7 +6,19 @@ It announces PR opening (including drafts), reopening, readiness for review, clo
 
 ## Set up
 
-Install Python 3.13+ and uv, then run:
+Install Python 3.13+ and uv. Building dependencies from source requires a C/C++
+compiler toolchain, matching Python development headers, and Rust tooling
+(Cargo and rustc). On Debian Trixie, install the system prerequisites used by CI:
+
+```sh
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends build-essential cargo ca-certificates git python3 python3-dev python3-venv openssl
+```
+
+`build-essential` provides the C/C++ toolchain, `python3-dev` supplies the Python
+headers, and `cargo` also installs rustc for dependencies such as Pendulum.
+OpenSSL is needed by the local TLS integration tests. Install uv separately,
+then run:
 
 ```sh
 uv sync
