@@ -125,6 +125,10 @@ Output URLs are limited to HTTPS `github.com`. GitHub Enterprise, interactive co
 
 ## Development
 
+GitHub Actions runs lint, formatting, type checks, the full test suite, and package
+builds on pushes to `main` and pull requests. Checks run inside a Debian Trixie
+container using Debian's Python 3.13, hosted on an Ubuntu runner.
+
 ```sh
 uv sync
 uv run pytest
